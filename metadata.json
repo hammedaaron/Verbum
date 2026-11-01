@@ -1,0 +1,6 @@
+{
+  "name": "Verbum - Ultra-Scale Manuscript Editor",
+  "description": "A minimalist, high-performance manuscript editor engineered for writing and managing documents exceeding 3 million words with dual-page split screen, semantic search, and milestone snapshots.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
