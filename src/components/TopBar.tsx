@@ -19,6 +19,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { Manuscript, EditorSettings } from '../types/manuscript';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface TopBarProps {
   manuscript: Manuscript;
@@ -67,16 +68,36 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <header className="h-10 border-b border-neutral-200/70 dark:border-white/10 bg-white/80 dark:bg-[#161618]/80 backdrop-blur-xl px-3 flex items-center justify-between text-xs select-none z-30 shrink-0 font-sans">
-      {/* Left: Library Button & Document Title */}
-      <div className="flex items-center gap-2.5 min-w-0">
+      {/* Left: Brand Logo, Library Button & Document Title */}
+      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+        {/* Verbum Logo */}
+        <div
+          onClick={onOpenManuscripts}
+          className="flex items-center gap-2 cursor-pointer group shrink-0"
+          title="Verbum - Manuscript Engine"
+        >
+          <div className="w-6 h-6 rounded-md overflow-hidden bg-black ring-1 ring-white/20 shadow-xs flex items-center justify-center transition-transform group-hover:scale-105">
+            <img
+              src="/pwa-192x192.png"
+              alt="Verbum"
+              className="w-full h-full object-cover"
+            />
+          </div>
+          <span className="font-serif font-bold text-xs tracking-wider text-neutral-900 dark:text-neutral-100 hidden sm:inline-block">
+            VERBUM
+          </span>
+        </div>
+
+        <div className="h-3.5 w-px bg-neutral-200 dark:bg-white/10 hidden sm:block" />
+
         <button
           type="button"
           onClick={onOpenManuscripts}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-white/10 font-medium transition text-xs"
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-white/10 font-medium transition text-xs"
           title="Manuscript Library (⌘O)"
         >
-          <BookOpen size={14} className="opacity-70" />
-          <span className="font-medium">Library</span>
+          <BookOpen size={13} className="opacity-70" />
+          <span className="font-medium hidden md:inline">Library</span>
         </button>
 
         <div className="h-3.5 w-px bg-neutral-200 dark:bg-white/10" />
@@ -244,6 +265,9 @@ export const TopBar: React.FC<TopBarProps> = ({
         >
           <Bookmark size={14} />
         </button>
+
+        {/* PWA In-App Install Prompt */}
+        <PWAInstallButton />
 
         {/* Export */}
         <button

@@ -21,6 +21,7 @@ import { MilestonesModal } from './components/MilestonesModal';
 import { ExportModal } from './components/ExportModal';
 import { StatisticsModal } from './components/StatisticsModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 export default function App() {
   const [manuscripts, setManuscripts] = useState<Manuscript[]>([]);
@@ -560,6 +561,8 @@ export default function App() {
         isOpen={isShortcutsOpen}
         onClose={() => setIsShortcutsOpen(false)}
       />
+
+      <OfflineIndicator />
     </div>
   );
 }

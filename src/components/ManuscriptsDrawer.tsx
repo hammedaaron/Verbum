@@ -193,9 +193,12 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
       <div className="w-full max-w-3xl bg-white dark:bg-[#161618] border-r border-neutral-200 dark:border-white/10 shadow-2xl flex flex-col overflow-hidden text-neutral-800 dark:text-neutral-200 text-xs">
         {/* macOS Toolbar */}
         <div className="h-11 px-4 border-b border-neutral-200 dark:border-white/10 flex items-center justify-between bg-neutral-50/50 dark:bg-white/[0.02]">
-          <div className="flex items-center gap-3">
-            <span className="font-semibold text-sm text-neutral-900 dark:text-white">
-              Manuscripts
+          <div className="flex items-center gap-2.5">
+            <div className="w-5 h-5 rounded-md overflow-hidden bg-black ring-1 ring-white/20 shrink-0">
+              <img src="/pwa-192x192.png" alt="Verbum" className="w-full h-full object-cover" />
+            </div>
+            <span className="font-semibold text-sm text-neutral-900 dark:text-white font-serif tracking-wide">
+              Verbum Manuscripts
             </span>
           </div>
 
