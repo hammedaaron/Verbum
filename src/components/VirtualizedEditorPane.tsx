@@ -71,6 +71,10 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
   const editorRootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastCaretRangeRef = useRef<Range | null>(null);
+  const isUserScrollingRef = useRef(false);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isLocalUpdateRef = useRef(false);
 
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
   const [toolbarPos, setToolbarPos] = useState<{ top: number; left: number } | null>(null);
@@ -101,10 +105,23 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
     beforeTypingSnapshotRef.current = null;
   }, [currentManuscriptId, pageId]);
 
-  // Synchronize blocks to unified continuous document HTML whenever blocks change or when returning from TOC
+  // Synchronize blocks to continuous document HTML when blocks change externally or on undo/redo/TOC
   useEffect(() => {
     if (!editorRootRef.current) return;
-    if (!isTypingRef.current || isUndoRedoAction.current || !isTocOpen) {
+
+    // Never wipe the live DOM if this update was triggered by local typing or pasting in this pane!
+    if (isLocalUpdateRef.current) {
+      isLocalUpdateRef.current = false;
+      return;
+    }
+
+    if (isUndoRedoAction.current) {
+      editorRootRef.current.innerHTML = renderBlocksToDocumentHtml(blocks);
+      return;
+    }
+
+    // External change (e.g. document load, cross-page transfer, TOC jump)
+    if (!isTypingRef.current) {
       const generatedHtml = renderBlocksToDocumentHtml(blocks);
       if (editorRootRef.current.innerHTML !== generatedHtml) {
         editorRootRef.current.innerHTML = generatedHtml;
@@ -112,14 +129,53 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
     }
   }, [blocks, isTocOpen]);
 
-  // Sync scroll positions if enabled
+  // Sync scroll positions if enabled without jitter loops
   useEffect(() => {
-    if (syncScrollTop !== undefined && containerRef.current) {
+    if (syncScrollTop !== undefined && containerRef.current && !isUserScrollingRef.current) {
       if (Math.abs(containerRef.current.scrollTop - syncScrollTop) > 5) {
         containerRef.current.scrollTop = syncScrollTop;
       }
     }
   }, [syncScrollTop]);
+
+  // Global document selection listener: keeps caret range and active block ID accurate anywhere in viewport
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || !editorRootRef.current) return;
+
+      if (editorRootRef.current.contains(sel.anchorNode)) {
+        const range = sel.getRangeAt(0);
+        lastCaretRangeRef.current = range.cloneRange();
+
+        const blockEl = (sel.anchorNode?.nodeType === Node.ELEMENT_NODE
+          ? (sel.anchorNode as HTMLElement).closest('[data-block-id]')
+          : sel.anchorNode?.parentElement?.closest('[data-block-id]')) as HTMLElement | null;
+
+        if (blockEl) {
+          const id = blockEl.getAttribute('data-block-id');
+          if (id) setActiveBlockId(id);
+        }
+
+        if (!sel.isCollapsed) {
+          const rect = range.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            setToolbarPos({
+              top: Math.max(12, rect.top - 46),
+              left: Math.max(12, Math.min(window.innerWidth - 380, rect.left)),
+            });
+            return;
+          }
+        }
+      }
+      setToolbarPos(null);
+    };
+
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', onSelectionChange);
+    };
+  }, []);
 
   // Scroll to active search result
   useEffect(() => {
@@ -284,6 +340,7 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
       if (parsed.length === 0 && blocks.length > 0) return;
       pushHistory(parsed);
       beforeTypingSnapshotRef.current = null;
+      isLocalUpdateRef.current = true;
       handleUpdateBlocksInternal(parsed, false);
       setTimeout(() => {
         isTypingRef.current = false;
@@ -291,25 +348,36 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
     }, debounceMs);
   };
 
-  // Selection handler: tracks selection anywhere across sections to display floating toolbar
+  // Selection handler: tracks selection and cursor anywhere across sections to display floating toolbar and preserve caret
   const handleSelectionUpdate = () => {
     const sel = window.getSelection();
-    if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+    if (!sel || sel.rangeCount === 0 || !editorRootRef.current) return;
+
+    if (editorRootRef.current.contains(sel.anchorNode)) {
       const range = sel.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        const startBlock = sel.anchorNode?.parentElement?.closest('[data-block-id]');
-        if (startBlock) {
-          const id = startBlock.getAttribute('data-block-id');
-          if (id) setActiveBlockId(id);
+      lastCaretRangeRef.current = range.cloneRange();
+
+      const startBlock = (sel.anchorNode?.nodeType === Node.ELEMENT_NODE
+        ? (sel.anchorNode as HTMLElement).closest('[data-block-id]')
+        : sel.anchorNode?.parentElement?.closest('[data-block-id]')) as HTMLElement | null;
+
+      if (startBlock) {
+        const id = startBlock.getAttribute('data-block-id');
+        if (id) setActiveBlockId(id);
+      }
+
+      if (!sel.isCollapsed) {
+        const rect = range.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          setToolbarPos({
+            top: Math.max(12, rect.top - 46),
+            left: Math.max(12, Math.min(window.innerWidth - 380, rect.left)),
+          });
+          return;
         }
-        setToolbarPos({
-          top: Math.max(12, rect.top - 46),
-          left: Math.max(12, Math.min(window.innerWidth - 380, rect.left)),
-        });
-        return;
       }
     }
+    setToolbarPos(null);
   };
 
   const handleUpdateActiveBlock = (patch: Partial<DocumentBlock>) => {
@@ -527,7 +595,7 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
   };
 
   // Paste handler: recognizes titles, subtitles, bold, italics, monospace, and quotes individually.
-  // Never forces everything into one dominant format or capitalizes text.
+  // Pastes EXACTLY wherever the cursor is placed in the document rather than at the bottom of the page.
   const handleContinuousPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     if (editorRootRef.current) {
       pushHistory(parseDocumentHtmlToBlocks(editorRootRef.current));
@@ -599,17 +667,42 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
 
     if (!editorRootRef.current) return;
 
-    // Check if it's purely a single inline fragment (e.g. bold or italic phrase)
+    // Determine current selection range inside this editor
+    const sel = window.getSelection();
+    let range: Range | null = null;
+    if (sel && sel.rangeCount > 0 && editorRootRef.current.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0);
+    } else if (
+      lastCaretRangeRef.current &&
+      editorRootRef.current.contains(lastCaretRangeRef.current.startContainer)
+    ) {
+      range = lastCaretRangeRef.current;
+    }
+
+    // If still no range, position at the end of the editor root
+    if (!range) {
+      range = document.createRange();
+      if (editorRootRef.current.lastElementChild) {
+        range.selectNodeContents(editorRootRef.current.lastElementChild);
+        range.collapse(false);
+      } else {
+        range.selectNodeContents(editorRootRef.current);
+        range.collapse(false);
+      }
+    }
+
+    // If user has a selected range, delete selected contents first
+    if (range && !range.collapsed) {
+      range.deleteContents();
+    }
+
+    // Check if it's purely a single inline fragment (e.g. bold or italic phrase, word, single sentence)
     const isSingleInline =
       blocksToInsert.length === 1 &&
       blocksToInsert[0].type === 'body' &&
       !blocksToInsert[0].text.includes('\n');
 
-    const sel = window.getSelection();
-
-    if (isSingleInline && sel && sel.rangeCount > 0 && editorRootRef.current.contains(sel.anchorNode)) {
-      const range = sel.getRangeAt(0);
-      range.deleteContents();
+    if (isSingleInline && range && editorRootRef.current.contains(range.startContainer)) {
       const inlineHtml = renderInlineMarkdownToHtml(blocksToInsert[0].text);
       const span = document.createElement('span');
       span.innerHTML = inlineHtml;
@@ -619,58 +712,112 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
         lastNode = frag.appendChild(span.firstChild);
       }
       range.insertNode(frag);
-      if (lastNode) {
+      if (lastNode && sel) {
         range.setStartAfter(lastNode);
         range.collapse(true);
         sel.removeAllRanges();
         sel.addRange(range);
+        lastCaretRangeRef.current = range.cloneRange();
       }
-      handleContinuousInput();
+
+      // Keep newly pasted inline content smoothly in view
+      if (lastNode instanceof HTMLElement) {
+        lastNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (lastNode?.parentElement) {
+        lastNode.parentElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+
+      const parsed = parseDocumentHtmlToBlocks(editorRootRef.current);
+      isLocalUpdateRef.current = true;
+      handleUpdateBlocksInternal(parsed, true);
       return;
     }
 
-    // Multi-block or formatted blocks (titles, subtitles, monospace, blockquotes, lists):
-    // Splice them directly as top-level independent blocks!
-    const currentBlocks = [...blocks];
+    // Multi-block or multi-line paste (paragraphs from Docs, web pages, headings, lists):
+    // Insert EXACTLY where the cursor is placed in the live DOM
+    let currentBlockEl: HTMLElement | null = null;
+    if (range) {
+      currentBlockEl = (range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as HTMLElement).closest('[data-block-id]')
+        : range.startContainer.parentElement?.closest('[data-block-id]')) as HTMLElement | null;
+    }
 
-    if (activeBlockId) {
-      const idx = currentBlocks.findIndex((b) => b.id === activeBlockId);
-      if (idx !== -1) {
-        const targetBlock = currentBlocks[idx];
-        const isTargetEmpty = !targetBlock.text || !targetBlock.text.trim();
-        if (isTargetEmpty) {
-          currentBlocks.splice(idx, 1, ...blocksToInsert);
-        } else {
-          currentBlocks.splice(idx + 1, 0, ...blocksToInsert);
-        }
+    // Render the new blocks into a real DOM fragment
+    const tempContainer = document.createElement('div');
+    tempContainer.innerHTML = renderBlocksToDocumentHtml(blocksToInsert);
+    const frag = document.createDocumentFragment();
+    let firstPastedNode: Node | null = null;
+    let lastPastedNode: Node | null = null;
+    while (tempContainer.firstChild) {
+      const node = tempContainer.firstChild;
+      if (!firstPastedNode) firstPastedNode = node;
+      lastPastedNode = node;
+      frag.appendChild(node);
+    }
+
+    if (currentBlockEl && editorRootRef.current.contains(currentBlockEl)) {
+      const blockText = (currentBlockEl.textContent || '').trim();
+
+      if (!blockText) {
+        // Current block is empty: replace it directly in place
+        currentBlockEl.replaceWith(frag);
       } else {
-        currentBlocks.push(...blocksToInsert);
+        // Current block has text: split at cursor position
+        const afterRange = document.createRange();
+        afterRange.selectNodeContents(currentBlockEl);
+        afterRange.setStart(range.endContainer, range.endOffset);
+        const afterFrag = afterRange.extractContents();
+
+        const afterText = (afterFrag.textContent || '').trim();
+        const beforeText = (currentBlockEl.textContent || '').trim();
+
+        if (!beforeText && afterText) {
+          // Cursor was at the start of the block: insert before
+          currentBlockEl.before(frag);
+        } else if (beforeText && !afterText) {
+          // Cursor was at the end of the block: insert after
+          currentBlockEl.after(frag);
+        } else if (beforeText && afterText) {
+          // Cursor was in the middle: create a continuation block for the remaining after-text
+          const continuationEl = currentBlockEl.cloneNode(false) as HTMLElement;
+          continuationEl.setAttribute(
+            'data-block-id',
+            'blk_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36)
+          );
+          continuationEl.appendChild(afterFrag);
+
+          currentBlockEl.after(frag, continuationEl);
+        } else {
+          currentBlockEl.after(frag);
+        }
       }
-    } else if (currentBlocks.length === 1 && (!currentBlocks[0].text || !currentBlocks[0].text.trim())) {
-      currentBlocks.splice(0, 1, ...blocksToInsert);
     } else {
-      currentBlocks.push(...blocksToInsert);
+      // Not inside an existing block: append to editor root
+      editorRootRef.current.appendChild(frag);
     }
 
-    // Immediately update DOM with newly rendered HTML so it is 100% visible
-    const newHtml = renderBlocksToDocumentHtml(currentBlocks);
-    editorRootRef.current.innerHTML = newHtml;
+    // Set cursor to the end of the last inserted block and scroll into view smoothly
+    if (lastPastedNode && sel) {
+      const newRange = document.createRange();
+      newRange.selectNodeContents(lastPastedNode);
+      newRange.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      lastCaretRangeRef.current = newRange.cloneRange();
 
-    // Set cursor to the end of the last inserted block
-    const lastBlock = blocksToInsert[blocksToInsert.length - 1];
-    if (lastBlock) {
-      const lastEl = editorRootRef.current.querySelector(`[data-block-id="${lastBlock.id}"]`);
-      if (lastEl && sel) {
-        const newRange = document.createRange();
-        newRange.selectNodeContents(lastEl);
-        newRange.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(newRange);
-        setActiveBlockId(lastBlock.id);
+      const lastId = (lastPastedNode as HTMLElement).getAttribute?.('data-block-id');
+      if (lastId) setActiveBlockId(lastId);
+
+      // Smart scroll: smoothly ensure the pasted content and caret are in view without jumping
+      if (lastPastedNode instanceof HTMLElement) {
+        lastPastedNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }
 
-    handleUpdateBlocksInternal(currentBlocks, true);
+    // Sync state from the transformed live DOM
+    const parsed = parseDocumentHtmlToBlocks(editorRootRef.current);
+    isLocalUpdateRef.current = true;
+    handleUpdateBlocksInternal(parsed, true);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -902,46 +1049,89 @@ export const VirtualizedEditorPane: React.FC<VirtualizedEditorPaneProps> = ({
         ref={containerRef}
         style={{ display: isTocOpen ? 'none' : 'block' }}
         onScroll={(e) => {
+          isUserScrollingRef.current = true;
+          if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+          scrollTimeoutRef.current = setTimeout(() => {
+            isUserScrollingRef.current = false;
+          }, 150);
           if (onScroll) onScroll(e.currentTarget.scrollTop);
         }}
         onMouseUp={handleSelectionUpdate}
         onKeyUp={handleSelectionUpdate}
-        className="flex-1 overflow-y-auto px-6 sm:px-12 py-10 custom-scrollbar focus:outline-none"
-          onClick={(e) => {
-            const target = e.target as HTMLElement;
+        className="flex-1 overflow-y-auto px-6 sm:px-12 py-10 custom-scrollbar focus:outline-none scroll-smooth [overflow-anchor:auto]"
+        onClick={(e) => {
+          const target = e.target as HTMLElement;
 
-            // Expand embedded doc
-            if (target.getAttribute('data-action') === 'expand-embedded') {
-              const card = target.closest('[data-embedded-doc]');
-              if (card) {
-                const raw = card.getAttribute('data-embedded-blocks');
-                if (raw) {
-                  try {
-                    const embBlocks: DocumentBlock[] = JSON.parse(raw);
-                    const blockId = card.getAttribute('data-block-id');
-                    const idx = blocks.findIndex((b) => b.id === blockId);
-                    if (idx !== -1) {
-                      const updated = [...blocks];
-                      updated.splice(idx, 1, ...embBlocks);
-                      handleUpdateBlocksInternal(updated, true);
+          // Expand embedded doc
+          if (target.getAttribute('data-action') === 'expand-embedded') {
+            const card = target.closest('[data-embedded-doc]');
+            if (card) {
+              const raw = card.getAttribute('data-embedded-blocks');
+              if (raw) {
+                try {
+                  const embBlocks: DocumentBlock[] = JSON.parse(raw);
+                  const blockId = card.getAttribute('data-block-id');
+                  const idx = blocks.findIndex((b) => b.id === blockId);
+                  if (idx !== -1) {
+                    const updated = [...blocks];
+                    updated.splice(idx, 1, ...embBlocks);
+                    handleUpdateBlocksInternal(updated, true);
+                  }
+                } catch (err) {}
+              }
+            }
+            return;
+          }
+
+          // Inline document trigger
+          if (target.closest('.inline-doc-trigger')) {
+            setInlineImportTargetIndex(blocks.length - 1);
+            return;
+          }
+
+          // If clicked outside text in container: place caret accurately at nearest point
+          if (e.target === containerRef.current || target.classList.contains('max-w-2xl')) {
+            setToolbarPos(null);
+            if (editorRootRef.current) {
+              const sel = window.getSelection();
+              let placed = false;
+              if ((document as any).caretRangeFromPoint) {
+                try {
+                  const ptRange = (document as any).caretRangeFromPoint(e.clientX, e.clientY) as Range | null;
+                  if (ptRange && editorRootRef.current.contains(ptRange.startContainer)) {
+                    sel?.removeAllRanges();
+                    sel?.addRange(ptRange);
+                    lastCaretRangeRef.current = ptRange.cloneRange();
+                    const blockEl = (ptRange.startContainer.nodeType === Node.ELEMENT_NODE
+                      ? (ptRange.startContainer as HTMLElement).closest('[data-block-id]')
+                      : ptRange.startContainer.parentElement?.closest('[data-block-id]')) as HTMLElement | null;
+                    if (blockEl) {
+                      const id = blockEl.getAttribute('data-block-id');
+                      if (id) setActiveBlockId(id);
                     }
-                  } catch (err) {}
+                    placed = true;
+                  }
+                } catch (err) {}
+              }
+
+              if (!placed) {
+                // If clicked below all content, place caret at the end of the last block
+                const lastEl = editorRootRef.current.lastElementChild as HTMLElement | null;
+                if (lastEl && sel) {
+                  const range = document.createRange();
+                  range.selectNodeContents(lastEl);
+                  range.collapse(false);
+                  sel.removeAllRanges();
+                  sel.addRange(range);
+                  lastCaretRangeRef.current = range.cloneRange();
+                  const id = lastEl.getAttribute('data-block-id');
+                  if (id) setActiveBlockId(id);
                 }
               }
-              return;
             }
-
-            // Inline document trigger
-            if (target.closest('.inline-doc-trigger')) {
-              setInlineImportTargetIndex(blocks.length - 1);
-              return;
-            }
-
-            if (e.target === containerRef.current) {
-              setToolbarPos(null);
-            }
-          }}
-        >
+          }
+        }}
+      >
           <div className="max-w-2xl mx-auto">
             {/* Continuous Unified Document Root: Drag mouse freely across all sections and formats */}
             <div

@@ -170,46 +170,38 @@ export function domFragmentToMarkdown(fragment: DocumentFragment | HTMLElement):
  * Recognizes titles, subtitles, bold, italics, monospace, blockquotes, and lists individually
  * without collapsing them into a single dominant format or altering casing.
  */
+function hasBlockLevelChildren(node: Node): boolean {
+  if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return false;
+  const element = node as HTMLElement;
+  const blockSelector = 'p, h1, h2, h3, h4, h5, h6, ul, ol, li, blockquote, pre, div, table, tr, td, th, section, article, header, footer, [data-block-id], [data-embedded-doc]';
+  return Boolean(element.querySelector?.(blockSelector));
+}
+
+/**
+ * Converts a DOM selection fragment or HTML into structured, multi-format DocumentBlocks.
+ * Recognizes titles, subtitles, bold, italics, monospace, blockquotes, and lists individually
+ * without collapsing them into a single dominant format or altering casing.
+ * Handles nested wrappers from Google Docs (<b id="docs-internal-guid-...">), Microsoft Word,
+ * Wikipedia, blogs, and rich web pages seamlessly.
+ */
 export function domFragmentToSmartBlocks(container: DocumentFragment | HTMLElement): DocumentBlock[] {
   const blocks: DocumentBlock[] = [];
-  const nodes = Array.from(container.childNodes);
 
-  // Check if all nodes are purely inline (text nodes, strong, em, code, span, a)
-  const isAllInline = nodes.every((n) => {
-    if (n.nodeType === Node.TEXT_NODE) return true;
-    if (n.nodeType === Node.ELEMENT_NODE) {
-      const tag = (n as HTMLElement).tagName.toLowerCase();
-      return ['strong', 'b', 'em', 'i', 's', 'del', 'code', 'span', 'a', 'br'].includes(tag);
-    }
-    return false;
-  });
-
-  if (isAllInline && nodes.length > 0) {
-    let inlineMd = '';
-    for (const n of nodes) {
-      inlineMd += domNodeToMarkdown(n);
-    }
-    const trimmed = inlineMd.trim();
-    if (trimmed) {
-      return [createBlock('body', trimmed)];
-    }
-    return [];
-  }
-
-  for (const node of nodes) {
+  // Helper function to recursively extract blocks from any DOM subtree
+  function processNode(node: Node) {
     if (node.nodeType === Node.TEXT_NODE) {
       const text = node.textContent || '';
       if (text.trim()) {
         blocks.push(createBlock('body', text.trim()));
       }
-      continue;
+      return;
     }
 
-    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
     const el = node as HTMLElement;
     const tagName = el.tagName.toLowerCase();
 
-    // Embedded doc card
+    // 1. Embedded doc card
     if (el.getAttribute('data-embedded-doc') === 'true') {
       const title = el.getAttribute('data-embedded-title') || 'Document';
       const words = parseInt(el.getAttribute('data-embedded-words') || '0', 10);
@@ -229,35 +221,74 @@ export function domFragmentToSmartBlocks(container: DocumentFragment | HTMLEleme
         embeddedDocWords: words,
         embeddedDocBlocks: embeddedBlocks,
       });
-      continue;
+      return;
     }
 
-    // List container
-    if (tagName === 'ul' || tagName === 'ol') {
-      const listType: DocumentBlock['type'] = tagName === 'ol' ? 'numbered' : 'bullet';
-      const lis = Array.from(el.querySelectorAll('li'));
-      for (const li of lis) {
-        let liMd = '';
-        for (const c of Array.from(li.childNodes)) {
-          liMd += domNodeToMarkdown(c);
+    // 2. Containers with block-level children (Google Docs <b id="docs-internal-guid-...>, <div>, <section>, <article>, lists, tables)
+    if (hasBlockLevelChildren(el)) {
+      // List container
+      if (tagName === 'ul' || tagName === 'ol') {
+        const listType: DocumentBlock['type'] = tagName === 'ol' ? 'numbered' : 'bullet';
+        const lis = Array.from(el.querySelectorAll('li'));
+        for (const li of lis) {
+          let liMd = '';
+          for (const c of Array.from(li.childNodes)) {
+            liMd += domNodeToMarkdown(c);
+          }
+          const clean = liMd.trim().replace(/^([-*+]|\d+\.)\s*/, '');
+          if (clean) {
+            blocks.push(createBlock(listType, clean));
+          }
         }
-        const clean = liMd.trim().replace(/^([-*+]|\d+\.)\s*/, '');
-        if (clean) {
-          blocks.push(createBlock(listType, clean));
-        }
+        return;
       }
-      continue;
+
+      // Table container: extract rows as clean markdown rows
+      if (tagName === 'table') {
+        const rows = Array.from(el.querySelectorAll('tr'));
+        for (const row of rows) {
+          const cells = Array.from(row.querySelectorAll('th, td')).map((c) => {
+            let cellMd = '';
+            for (const child of Array.from(c.childNodes)) {
+              cellMd += domNodeToMarkdown(child);
+            }
+            return cellMd.trim();
+          });
+          if (cells.length > 0 && cells.some((c) => c.length > 0)) {
+            blocks.push(createBlock('body', `| ${cells.join(' | ')} |`));
+          }
+        }
+        return;
+      }
+
+      // Transparent wrapper elements (e.g. Google Docs <b id="docs-internal-guid-...>, <div>, <section>, <article>):
+      // Recursively process each child node to preserve the genuine block sequence
+      for (const child of Array.from(el.childNodes)) {
+        processNode(child);
+      }
+      return;
     }
 
-    // Recognize type by tag and semantic classes
+    // 3. Leaf Element without block descendants (e.g. <p>, <h1>, <h2>, <h3>, <blockquote>, <pre>, <li>, or inline-only <div>)
+    if (tagName === 'li') {
+      let liMd = '';
+      for (const c of Array.from(el.childNodes)) {
+        liMd += domNodeToMarkdown(c);
+      }
+      const clean = liMd.trim().replace(/^([-*+]|\d+\.)\s*/, '');
+      if (clean) {
+        blocks.push(createBlock('bullet', clean));
+      }
+      return;
+    }
+
+    // Determine semantic block type
     let type: DocumentBlock['type'] = 'body';
     if (tagName === 'h1') {
       type = el.classList.contains('doc-title') ? 'title' : 'h1';
     } else if (tagName === 'h2') {
       type = 'h2';
-    } else if (tagName === 'h3') {
-      type = 'h3';
-    } else if (tagName === 'h4' || tagName === 'h5' || tagName === 'h6') {
+    } else if (tagName === 'h3' || tagName === 'h4' || tagName === 'h5' || tagName === 'h6') {
       type = 'h3';
     } else if (tagName === 'blockquote') {
       type = 'blockquote';
@@ -269,7 +300,7 @@ export function domFragmentToSmartBlocks(container: DocumentFragment | HTMLEleme
       type = 'title';
     }
 
-    // Extract inline markdown of element contents (preserving bold, italics, monospace, strikethrough)
+    // Extract inline markdown of element contents (preserving bold, italics, monospace, strikethrough, links)
     let innerMarkdown = '';
     for (const child of Array.from(el.childNodes)) {
       innerMarkdown += domNodeToMarkdown(child);
@@ -309,9 +340,47 @@ export function domFragmentToSmartBlocks(container: DocumentFragment | HTMLEleme
       }
     }
 
+    // If leaf block contains double newlines (e.g. from <br><br> in a single div or paragraph), split into paragraphs
+    if (type === 'body' && cleanText.includes('\n\n')) {
+      const parts = cleanText.split(/\n{2,}/);
+      for (const p of parts) {
+        if (p.trim()) {
+          blocks.push(createBlock('body', p.trim()));
+        }
+      }
+      return;
+    }
+
     if (cleanText) {
       blocks.push(createBlock(type, cleanText));
     }
+  }
+
+  // Check if container has only purely inline elements (no block level descendants at all)
+  const isPureInline = !hasBlockLevelChildren(container) && Array.from(container.childNodes).every((n) => {
+    if (n.nodeType === Node.TEXT_NODE) return true;
+    if (n.nodeType === Node.ELEMENT_NODE) {
+      const tag = (n as HTMLElement).tagName.toLowerCase();
+      return ['strong', 'b', 'em', 'i', 's', 'del', 'code', 'span', 'a', 'br'].includes(tag);
+    }
+    return false;
+  });
+
+  if (isPureInline && container.childNodes.length > 0) {
+    let inlineMd = '';
+    for (const n of Array.from(container.childNodes)) {
+      inlineMd += domNodeToMarkdown(n);
+    }
+    const trimmed = inlineMd.trim();
+    if (trimmed) {
+      return [createBlock('body', trimmed)];
+    }
+    return [];
+  }
+
+  // Process all top-level child nodes
+  for (const node of Array.from(container.childNodes)) {
+    processNode(node);
   }
 
   return blocks;

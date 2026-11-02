@@ -17,6 +17,92 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Verbum" />
 
+    <!-- Suppress and neutralize Vite HMR WebSocket connection errors in cloud container environments -->
+    <script>
+      (function () {
+        if (typeof window !== 'undefined') {
+          // Capture and silence unhandled WebSocket rejection/errors from @vite/client
+          window.addEventListener(
+            'error',
+            function (e) {
+              if (
+                e.message &&
+                (e.message.includes('WebSocket') ||
+                  e.filename?.includes('@vite/client') ||
+                  e.message.includes('WebSocket closed without opened'))
+              ) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+              }
+            },
+            true
+          );
+
+          window.addEventListener(
+            'unhandledrejection',
+            function (e) {
+              if (
+                e.reason &&
+                (String(e.reason).includes('WebSocket') ||
+                  String(e.reason).includes('WebSocket closed without opened'))
+              ) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+              }
+            },
+            true
+          );
+
+          // Neutralize Vite HMR WebSocket connection attempts without affecting standard network requests
+          const OrigWebSocket = window.WebSocket;
+          if (OrigWebSocket) {
+            function MockHmrWebSocket(url, protocols) {
+              const isViteHmr =
+                protocols === 'vite-hmr' ||
+                (typeof protocols === 'string' && protocols.includes('vite-hmr')) ||
+                (Array.isArray(protocols) && protocols.includes('vite-hmr')) ||
+                (typeof url === 'string' && (url.includes('token=') || url.includes('vite-hmr')));
+
+              if (isViteHmr) {
+                const dummy = new EventTarget();
+                dummy.binaryType = 'blob';
+                dummy.readyState = 1; // WebSocket.OPEN
+                dummy.OPEN = 1;
+                dummy.CONNECTING = 0;
+                dummy.CLOSING = 2;
+                dummy.CLOSED = 3;
+                dummy.url = url;
+                dummy.protocol = 'vite-hmr';
+                dummy.extensions = '';
+                dummy.bufferedAmount = 0;
+                dummy.onopen = null;
+                dummy.onmessage = null;
+                dummy.onerror = null;
+                dummy.onclose = null;
+                dummy.send = function () {};
+                dummy.close = function () {};
+                dummy.addEventListener = EventTarget.prototype.addEventListener.bind(dummy);
+                dummy.removeEventListener = EventTarget.prototype.removeEventListener.bind(dummy);
+                dummy.dispatchEvent = EventTarget.prototype.dispatchEvent.bind(dummy);
+                setTimeout(function () {
+                  dummy.dispatchEvent(new Event('open'));
+                  if (typeof dummy.onopen === 'function') dummy.onopen(new Event('open'));
+                }, 0);
+                return dummy;
+              }
+              return new OrigWebSocket(url, protocols);
+            }
+            MockHmrWebSocket.prototype = OrigWebSocket.prototype;
+            MockHmrWebSocket.CONNECTING = OrigWebSocket.CONNECTING;
+            MockHmrWebSocket.OPEN = OrigWebSocket.OPEN;
+            MockHmrWebSocket.CLOSING = OrigWebSocket.CLOSING;
+            MockHmrWebSocket.CLOSED = OrigWebSocket.CLOSED;
+            window.WebSocket = MockHmrWebSocket;
+          }
+        }
+      })();
+    </script>
+
     <!-- Icons -->
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
