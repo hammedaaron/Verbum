@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "userProfile": {
+      "title": "UserProfile",
+      "description": "User profile with authentication and storage metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoURL": { "type": "string", "description": "User avatar URL" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in milliseconds" },
+        "updatedAt": { "type": "number", "description": "Last updated timestamp in milliseconds" }
+      },
+      "required": ["uid", "email"]
+    },
+    "manuscript": {
+      "title": "Manuscript",
+      "description": "A novel manuscript containing Page 1 and Page 2 with structured blocks and settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique manuscript ID" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "title": { "type": "string", "description": "Title of the manuscript" },
+        "description": { "type": "string", "description": "Brief description" },
+        "page1": { "type": "object", "description": "Page 1 document data" },
+        "page2": { "type": "object", "description": "Page 2 companion data" },
+        "dividerPosition": { "type": "number", "description": "Split screen divider ratio" },
+        "splitMode": { "type": "string", "description": "Layout split mode" },
+        "syncScroll": { "type": "boolean", "description": "Synchronized scrolling state" },
+        "createdAt": { "type": "number", "description": "Created at timestamp" },
+        "updatedAt": { "type": "number", "description": "Updated at timestamp" },
+        "archived": { "type": "boolean", "description": "Archived status" },
+        "orderIndex": { "type": "number", "description": "Sort order index" },
+        "properNouns": { "type": "array", "description": "Proper nouns index list" }
+      },
+      "required": ["id", "userId", "title"]
+    },
+    "milestone": {
+      "title": "Milestone",
+      "description": "An immutable versioned snapshot of a manuscript",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique milestone ID" },
+        "manuscriptId": { "type": "string", "description": "Parent manuscript ID" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "name": { "type": "string", "description": "Milestone name or summary" },
+        "wordCount": { "type": "number", "description": "Total word count at snapshot" },
+        "charCount": { "type": "number", "description": "Total char count at snapshot" },
+        "createdAt": { "type": "number", "description": "Timestamp created" },
+        "page1Blocks": { "type": "array", "description": "Page 1 blocks at snapshot" },
+        "page2Blocks": { "type": "array", "description": "Page 2 blocks at snapshot" }
+      },
+      "required": ["id", "manuscriptId", "userId", "name"]
+    },
+    "folder": {
+      "title": "ManuscriptFolder",
+      "description": "Folder organizing multiple manuscripts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique folder ID" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "name": { "type": "string", "description": "Folder name" },
+        "color": { "type": "string", "description": "Folder accent color" },
+        "orderIndex": { "type": "number", "description": "Order index" },
+        "createdAt": { "type": "number", "description": "Created at timestamp" }
+      },
+      "required": ["id", "userId", "name"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "userProfile",
+      "description": "User profile document storing basic account metadata"
+    },
+    "/users/{userId}/manuscripts/{manuscriptId}": {
+      "schema": "manuscript",
+      "description": "Private manuscripts owned by the authenticated user"
+    },
+    "/users/{userId}/manuscripts/{manuscriptId}/milestones/{milestoneId}": {
+      "schema": "milestone",
+      "description": "Immutable version milestones for the user's manuscript"
+    },
+    "/users/{userId}/folders/{folderId}": {
+      "schema": "folder",
+      "description": "Folders created by the user for manuscript organization"
+    }
+  }
+}

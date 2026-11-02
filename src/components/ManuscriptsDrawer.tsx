@@ -25,6 +25,14 @@ import {
   generateLargeManuscript,
   createBlock,
 } from '../services/storage';
+import { User } from 'firebase/auth';
+import {
+  saveManuscriptToCloud,
+  deleteManuscriptFromCloud,
+  saveFolderToCloud,
+  getManuscriptsFromCloud,
+  getFoldersFromCloud,
+} from '../services/firebase';
 
 interface ManuscriptsDrawerProps {
   isOpen: boolean;
@@ -32,6 +40,7 @@ interface ManuscriptsDrawerProps {
   currentManuscriptId: string;
   onSelectManuscript: (manuscript: Manuscript) => void;
   onOpenMilestones: () => void;
+  currentUser?: User | null;
 }
 
 export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
@@ -39,6 +48,7 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
   onClose,
   currentManuscriptId,
   onSelectManuscript,
+  currentUser,
 }) => {
   const [manuscripts, setManuscripts] = useState<Manuscript[]>([]);
   const [folders, setFolders] = useState<ManuscriptFolder[]>([]);
@@ -57,6 +67,37 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
   const reloadData = async () => {
     try {
       const [msList, fList] = await Promise.all([getManuscripts(), getFolders()]);
+      if (currentUser) {
+        try {
+          const [cloudMs, cloudFolders] = await Promise.all([
+            getManuscriptsFromCloud(currentUser.uid),
+            getFoldersFromCloud(currentUser.uid),
+          ]);
+          if (cloudMs.length > 0) {
+            const map = new Map<string, Manuscript>();
+            msList.forEach((m) => map.set(m.id, m));
+            cloudMs.forEach((m) => map.set(m.id, m));
+            const merged = Array.from(map.values());
+            setManuscripts(merged);
+            for (const item of cloudMs) {
+              saveManuscript(item).catch(() => {});
+            }
+          } else {
+            setManuscripts(msList);
+          }
+          if (cloudFolders.length > 0) {
+            const fMap = new Map<string, ManuscriptFolder>();
+            fList.forEach((f) => fMap.set(f.id, f));
+            cloudFolders.forEach((f) => fMap.set(f.id, f));
+            setFolders(Array.from(fMap.values()));
+          } else {
+            setFolders(fList);
+          }
+          return;
+        } catch (cErr) {
+          console.warn('Cloud sync in drawer offline:', cErr);
+        }
+      }
       setManuscripts(msList);
       setFolders(fList);
     } catch (err) {
@@ -124,6 +165,11 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
     };
 
     await saveManuscript(newManuscript);
+    if (currentUser) {
+      saveManuscriptToCloud(currentUser.uid, newManuscript).catch((err) =>
+        console.warn('Cloud create manuscript error:', err)
+      );
+    }
     await reloadData();
     onSelectManuscript(newManuscript);
     onClose();
@@ -137,6 +183,11 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
         words
       );
       await saveManuscript(scaleManuscript);
+      if (currentUser) {
+        saveManuscriptToCloud(currentUser.uid, scaleManuscript).catch((err) =>
+          console.warn('Cloud scale manuscript error:', err)
+        );
+      }
       await reloadData();
       onSelectManuscript(scaleManuscript);
       onClose();
@@ -151,12 +202,22 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
     if (!editingTitle.trim()) return;
     const updated = { ...m, title: editingTitle.trim(), updatedAt: Date.now() };
     await saveManuscript(updated);
+    if (currentUser) {
+      saveManuscriptToCloud(currentUser.uid, updated).catch((err) =>
+        console.warn('Cloud rename manuscript error:', err)
+      );
+    }
     setEditingManuscriptId(null);
     reloadData();
   };
 
   const handleDuplicate = async (m: Manuscript) => {
     const copy = await duplicateManuscript(m.id);
+    if (currentUser) {
+      saveManuscriptToCloud(currentUser.uid, copy).catch((err) =>
+        console.warn('Cloud duplicate manuscript error:', err)
+      );
+    }
     await reloadData();
     onSelectManuscript(copy);
   };
@@ -164,12 +225,22 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
   const handleToggleArchive = async (m: Manuscript) => {
     const updated = { ...m, archived: !m.archived, updatedAt: Date.now() };
     await saveManuscript(updated);
+    if (currentUser) {
+      saveManuscriptToCloud(currentUser.uid, updated).catch((err) =>
+        console.warn('Cloud archive manuscript error:', err)
+      );
+    }
     reloadData();
   };
 
   const handleDelete = async (m: Manuscript) => {
     if (confirm(`Delete "${m.title}"?`)) {
       await deleteManuscript(m.id);
+      if (currentUser) {
+        deleteManuscriptFromCloud(currentUser.uid, m.id).catch((err) =>
+          console.warn('Cloud delete manuscript error:', err)
+        );
+      }
       reloadData();
     }
   };
@@ -183,6 +254,11 @@ export const ManuscriptsDrawer: React.FC<ManuscriptsDrawerProps> = ({
       orderIndex: folders.length,
     };
     await saveFolder(folder);
+    if (currentUser) {
+      saveFolderToCloud(currentUser.uid, folder).catch((err) =>
+        console.warn('Cloud create folder error:', err)
+      );
+    }
     setNewFolderName('');
     setShowNewFolderInput(false);
     reloadData();

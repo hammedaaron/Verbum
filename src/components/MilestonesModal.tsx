@@ -9,12 +9,20 @@ import {
 } from 'lucide-react';
 import { Manuscript, Milestone } from '../types/manuscript';
 import { getMilestones, saveMilestone, deleteMilestone, restoreMilestoneAsNew } from '../services/storage';
+import { User } from 'firebase/auth';
+import {
+  saveMilestoneToCloud,
+  deleteMilestoneFromCloud,
+  getMilestonesFromCloud,
+  saveManuscriptToCloud,
+} from '../services/firebase';
 
 interface MilestonesModalProps {
   isOpen: boolean;
   onClose: () => void;
   manuscript: Manuscript;
   onOpenRestoredManuscript: (newManuscript: Manuscript) => void;
+  currentUser?: User | null;
 }
 
 export const MilestonesModal: React.FC<MilestonesModalProps> = ({
@@ -22,6 +30,7 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
   onClose,
   manuscript,
   onOpenRestoredManuscript,
+  currentUser,
 }) => {
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [activeMilestoneId, setActiveMilestoneId] = useState<string | null>(null);
@@ -31,6 +40,25 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
   const fetchMilestones = async () => {
     try {
       const list = await getMilestones(manuscript.id);
+      if (currentUser) {
+        try {
+          const cloudMilestones = await getMilestonesFromCloud(currentUser.uid, manuscript.id);
+          if (cloudMilestones.length > 0) {
+            // merge or prefer cloud
+            const mergedMap = new Map<string, Milestone>();
+            list.forEach((m) => mergedMap.set(m.id, m));
+            cloudMilestones.forEach((m) => mergedMap.set(m.id, m));
+            const merged = Array.from(mergedMap.values()).sort((a, b) => b.createdAt - a.createdAt);
+            setMilestones(merged);
+            if (merged.length > 0 && !activeMilestoneId) {
+              setActiveMilestoneId(merged[0].id);
+            }
+            return;
+          }
+        } catch (cErr) {
+          console.warn('Cloud milestones fetch offline:', cErr);
+        }
+      }
       setMilestones(list);
       if (list.length > 0 && !activeMilestoneId) {
         setActiveMilestoneId(list[0].id);
@@ -65,6 +93,11 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
     };
 
     await saveMilestone(newMilestone);
+    if (currentUser) {
+      saveMilestoneToCloud(currentUser.uid, newMilestone).catch((err: any) =>
+        console.warn('Milestone cloud save error:', err)
+      );
+    }
     await fetchMilestones();
     setActiveMilestoneId(newMilestone.id);
     setName('');
@@ -73,12 +106,22 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
 
   const handleRestoreMilestone = async (milestone: Milestone) => {
     const restored = await restoreMilestoneAsNew(milestone, manuscript);
+    if (currentUser) {
+      saveManuscriptToCloud(currentUser.uid, restored).catch((err: any) =>
+        console.warn('Cloud save for restored milestone failed:', err)
+      );
+    }
     onOpenRestoredManuscript(restored);
     onClose();
   };
 
   const handleDeleteMilestone = async (id: string) => {
     await deleteMilestone(id);
+    if (currentUser) {
+      deleteMilestoneFromCloud(currentUser.uid, manuscript.id, id).catch((err: any) =>
+        console.warn('Milestone cloud delete error:', err)
+      );
+    }
     await fetchMilestones();
     if (activeMilestoneId === id) setActiveMilestoneId(null);
   };

@@ -11,7 +11,15 @@ import {
   createInitialManuscript,
   getMilestones,
   saveMilestone,
+  getFolders,
 } from './services/storage';
+import { User } from 'firebase/auth';
+import {
+  subscribeToAuthState,
+  saveManuscriptToCloud,
+  getManuscriptsFromCloud,
+  saveFolderToCloud,
+} from './services/firebase';
 import { VirtualizedEditorPane } from './components/VirtualizedEditorPane';
 import { TopBar } from './components/TopBar';
 import { ManuscriptsDrawer } from './components/ManuscriptsDrawer';
@@ -27,6 +35,10 @@ export default function App() {
   const [manuscripts, setManuscripts] = useState<Manuscript[]>([]);
   const [currentManuscript, setCurrentManuscript] = useState<Manuscript | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // User Authentication & Cloud Sync
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'idle'>('idle');
 
   // Split-screen & Layout States
   const [splitMode, setSplitMode] = useState<'dual' | 'page1' | 'page2'>('dual');
@@ -91,6 +103,65 @@ export default function App() {
     loadData();
   }, []);
 
+  // Listen to Firebase Auth state for multi-user isolated storage
+  useEffect(() => {
+    const unsubscribe = subscribeToAuthState(async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        setCloudSyncStatus('syncing');
+        try {
+          const cloudManuscripts = await getManuscriptsFromCloud(user.uid);
+          if (cloudManuscripts && cloudManuscripts.length > 0) {
+            // User has existing manuscripts in their isolated cloud storage
+            setManuscripts(cloudManuscripts);
+            setCurrentManuscript(cloudManuscripts[0]);
+            setSplitMode(cloudManuscripts[0].splitMode || 'dual');
+            setDividerPercent(cloudManuscripts[0].dividerPosition || 50);
+            setSyncScroll(cloudManuscripts[0].syncScroll || false);
+            // Cache locally so offline writing continues seamlessly
+            for (const cm of cloudManuscripts) {
+              await saveManuscript(cm);
+            }
+          } else {
+            // New user account: backup existing local manuscripts to their cloud Firestore
+            const localManuscripts = await getManuscripts();
+            for (const lm of localManuscripts) {
+              await saveManuscriptToCloud(user.uid, lm);
+            }
+          }
+          setCloudSyncStatus('synced');
+        } catch (err) {
+          console.warn('Cloud sync error during auth change:', err);
+          setCloudSyncStatus('offline');
+        }
+      } else {
+        setCloudSyncStatus('idle');
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Sync all local manuscripts and folders to user's cloud account
+  const handleSyncAllLocalToCloud = async () => {
+    if (!currentUser) return;
+    setCloudSyncStatus('syncing');
+    try {
+      const localManuscripts = await getManuscripts();
+      for (const m of localManuscripts) {
+        await saveManuscriptToCloud(currentUser.uid, m);
+      }
+      const localFolders = await getFolders();
+      for (const f of localFolders) {
+        await saveFolderToCloud(currentUser.uid, f);
+      }
+      setCloudSyncStatus('synced');
+    } catch (err) {
+      console.error('Failed to sync all local to cloud:', err);
+      setCloudSyncStatus('offline');
+    }
+  };
+
   // Global Keyboard Shortcuts (Ctrl+F, Ctrl+H, Ctrl+S, Ctrl+\)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -121,8 +192,29 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
-  // Continuous Autosave Debouncer
+  // Track latest manuscript in a ref for immediate beforeunload flush
+  const latestManuscriptRef = useRef<Manuscript | null>(null);
+  useEffect(() => {
+    latestManuscriptRef.current = currentManuscript;
+  }, [currentManuscript]);
+
+  // Flush any pending save immediately when refreshing, closing, or navigating away
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (latestManuscriptRef.current) {
+        saveManuscript(latestManuscriptRef.current);
+        if (currentUser) {
+          saveManuscriptToCloud(currentUser.uid, latestManuscriptRef.current).catch(() => {});
+        }
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [currentUser]);
+
+  // Continuous Autosave Debouncer (Dual persistence: Local IndexedDB + Firebase Cloud)
   const triggerAutosave = useCallback((updated: Manuscript) => {
+    latestManuscriptRef.current = updated;
     setSaveStatus('saving');
     if (autosaveTimeoutRef.current) {
       clearTimeout(autosaveTimeoutRef.current);
@@ -132,12 +224,24 @@ export default function App() {
       try {
         await saveManuscript(updated);
         setSaveStatus('saved');
+
+        // Cloud replication if signed in
+        if (currentUser) {
+          setCloudSyncStatus('syncing');
+          try {
+            await saveManuscriptToCloud(currentUser.uid, updated);
+            setCloudSyncStatus('synced');
+          } catch (cErr) {
+            console.warn('Firebase cloud save failed (offline cache active):', cErr);
+            setCloudSyncStatus('offline');
+          }
+        }
       } catch (err) {
         console.error('Autosave error:', err);
         setSaveStatus('unsaved');
       }
     }, 450);
-  }, []);
+  }, [currentUser]);
 
   // Update Page 1 Blocks
   const handleUpdatePage1Blocks = useCallback(
@@ -376,6 +480,9 @@ export default function App() {
           }
           onOpenStats={() => setIsStatsOpen(true)}
           onOpenShortcuts={() => setIsShortcutsOpen(true)}
+          currentUser={currentUser}
+          cloudSyncStatus={cloudSyncStatus}
+          onSyncAllLocalToCloud={handleSyncAllLocalToCloud}
         />
       )}
 
@@ -501,6 +608,7 @@ export default function App() {
           setIsManuscriptsOpen(false);
           setIsMilestonesOpen(true);
         }}
+        currentUser={currentUser}
       />
 
       <SearchReplaceModal
@@ -543,6 +651,7 @@ export default function App() {
         onOpenRestoredManuscript={(restored) => {
           setCurrentManuscript(restored);
         }}
+        currentUser={currentUser}
       />
 
       <ExportModal

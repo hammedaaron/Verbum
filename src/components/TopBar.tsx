@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { Manuscript, EditorSettings } from '../types/manuscript';
 import { PWAInstallButton } from './PWAInstallButton';
+import { UserAuthButton } from './UserAuthButton';
+import { User } from 'firebase/auth';
 
 interface TopBarProps {
   manuscript: Manuscript;
@@ -40,6 +42,9 @@ interface TopBarProps {
   onUpdateEditorSettings: (settings: Partial<EditorSettings>) => void;
   onOpenStats: () => void;
   onOpenShortcuts: () => void;
+  currentUser: User | null;
+  cloudSyncStatus: 'synced' | 'syncing' | 'offline' | 'idle';
+  onSyncAllLocalToCloud?: () => Promise<void>;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -59,6 +64,9 @@ export const TopBar: React.FC<TopBarProps> = ({
   onUpdateEditorSettings,
   onOpenStats,
   onOpenShortcuts,
+  currentUser,
+  cloudSyncStatus,
+  onSyncAllLocalToCloud,
 }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -268,6 +276,13 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* PWA In-App Install Prompt */}
         <PWAInstallButton />
+
+        {/* Google Authentication & Cloud Storage Status */}
+        <UserAuthButton
+          currentUser={currentUser}
+          cloudSyncStatus={cloudSyncStatus}
+          onSyncAllLocalToCloud={onSyncAllLocalToCloud}
+        />
 
         {/* Export */}
         <button
